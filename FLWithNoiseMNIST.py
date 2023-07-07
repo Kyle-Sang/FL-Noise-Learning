@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+
 # Commented out IPython magic to ensure Python compatibility.
 #   %load_ext tensorboard
 import os
@@ -20,6 +22,11 @@ from torchvision import transforms, utils, datasets
 from argparse import ArgumentParser
 from torchvision import transforms as tt
 import csv
+import glob, random
+
+# from resnet import ResNet
+
+# from torchsummary import summary
 
 # set manual seed for reproducibility
 # seed = 42
@@ -36,35 +43,43 @@ torch.backends.cudnn.benchmark = False
 from PIL import Image
 import numpy as np
 import torchvision.transforms.functional as T
-import glob, random
 
 def load_image(infilename, resize=32) :
-    img = T.resize(Image.open(infilename), size=resize)
+    img = T.resize(Image.open(infilename).convert('L'), size=resize)
+    w, h = img.size
+    img = img.crop((2, 2, w-2, h-2))
     img.load()
     data = np.asarray(img, dtype="uint8")
+    # data = np.expand_dims(data, axis=2)
+    
     return np.transpose(data)
 
 def mixup_data(x, data, alpha=1.0, use_cuda=True):
-    '''Compute the mixup data. Return mixed input'''
+
+    '''Compute the mixup data. Return mixed inputs, pairs of targets, and lambda'''
+    # if alpha > 0.:
+    #     lam = np.random.beta(alpha, alpha)
+    # else:
+    #     lam = 1.
+    # batch_size = x.size()[0]
+    # if use_cuda:
+    #     index = torch.randperm(batch_size).cuda()
+    # else:
+    #     index = torch.randperm(batch_size)
     low = 0.1
     k = len(data)
 
-    # Weight for main image
     dist = np.random.beta(alpha, alpha)
     main_weight = .5 + (dist * .25)
-
-    # Weights for helper images in data
     a = np.random.rand(k)
     a = (a/a.sum()*(1-low*k))
     weights = a+low
     weights = weights * (1-main_weight)
-
-    # Mix weights
     mixed_x = ((x * main_weight) + np.sum([arr * weights[i] for i, arr in enumerate(data)], axis=0)).astype(np.uint8)
+    # y_a, y_b = y, y[index]
     return mixed_x
 
 def AddNoise(tensor, dataset, mean, std, gaussian_application, natural_image_application, simple=False, mix_num=3):
-    '''Add mixup noise, natural images, or no change to dataset'''
     choice = np.random.rand()
     if choice < gaussian_application:
         if not simple:
@@ -72,7 +87,7 @@ def AddNoise(tensor, dataset, mean, std, gaussian_application, natural_image_app
         tensor = torch.from_numpy(tensor)
         return ((tensor + torch.tensor(np.random.laplace(mean, std, size=tensor.size()))).numpy()).astype(np.uint8)
     elif choice < (gaussian_application + natural_image_application):
-        return natural_images[np.random.randint(len(natural_images))]
+        return natural_images[np.random.randint(60000)]
     else:
         return tensor
 
@@ -92,6 +107,7 @@ def iid_partition(dataset, clients):
     returns:
       - Dictionary of image indexes for each client
     """
+
     num_items_per_client = int(len(dataset) / clients)
     client_dict = {}
     image_idxs = [i for i in range(len(dataset))]
@@ -437,8 +453,8 @@ if __name__ == '__main__':
     parser.add_argument('--clientlr', type=float, default=0.001)
     parser.add_argument('--sch_flag', default=False)
     parser.add_argument('--mixup_prop', type=float, default=0.0)
-    parser.add_argument('--natural_img_prop', type=float, default=0.0)
-    parser.add_argument('--real_prop', type=float, default=0.0)
+    parser.add_argument('--natural_img_prop', type=float, default=0.)
+    parser.add_argument('--real_prop', type=float, default=0.)
     parser.add_argument('--mix_num', type=int, default=3)
     parser.add_argument('--laplace_scale', type=float, default=50.)
     parser.add_argument('--no_supplement', action="store_false")
@@ -446,20 +462,16 @@ if __name__ == '__main__':
     parser.add_argument('--natural_image_path', default="./stylegan-oriented/train")
 
     args = parser.parse_args()
-
     # create transforms
     # We will just convert to tensor and normalize since no special transforms are mentioned in the paper
     stats = ((0.49139968, 0.48215841, 0.44653091), (0.24703223, 0.24348513, 0.26158784))
-    transforms_cifar_train = tt.Compose([tt.ToTensor(),
-                                         tt.RandomCrop(32, padding=4, padding_mode='reflect'),
-                                         tt.RandomHorizontalFlip(p=0.5),
-                                         tt.Normalize(*stats)])
-    transforms_cifar_test = transforms.Compose(
-        [transforms.ToTensor(),
-         transforms.Normalize(*stats)])
+    transforms_cifar_train = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.5,), (0.5,))])
+    transforms_cifar_test = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.5,), (0.5,))])
 
-    cifar_data_train = datasets.CIFAR10(root='./data', train=True, download=True, transform=transforms_cifar_train)
-    cifar_data_test = datasets.CIFAR10(root='./data', train=False, download=True, transform=transforms_cifar_test)
+    cifar_data_train = datasets.MNIST(root='./data', train=True, download=True, transform=transforms_cifar_train)
+    cifar_data_test = datasets.MNIST(root='./data', train=False, download=True, transform=transforms_cifar_test)
+    cifar_data_train.data = cifar_data_train.data.numpy()
+    # cifar_data_test.data = cifar_data_test.data.numpy()
 
     classes = np.array(list(cifar_data_train.class_to_idx.values()))
     classes_test = np.array(list(cifar_data_test.class_to_idx.values()))
@@ -493,34 +505,49 @@ if __name__ == '__main__':
         # cifar_cnn = resnet.ResNet(resnet.Bottleneck, [3, 4, 6, 3], num_classes=10, zero_init_residual=False, groups=1,
         #                           width_per_group=64, replace_stride_with_dilation=None)
         cifar_cnn = models.resnet18() # ResNet9(3,10)
+    cifar_cnn.conv1 = nn.Conv2d(1, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False)
 
     cifar_cnn.cuda()
+
+    #print(cifar_cnn)
+    #MNIST Compatibility changes
+    
+    #cifar_cnn.fc = nn.Linear(512, 10, bias=True)
 
     # Add noise portion of dataset
     # IMPORTANT: this part must go after the non_iid_partition is made
     mixup_copy = copy.deepcopy(cifar_data_train.data)
+
+    # please ensure proportions add up to one
     mixup_dataset = AddNoise(mixup_copy, cifar_data_train.data, 0., args.laplace_scale, 1., 0., mix_num=args.mix_num)
     if len(natural_images) != 0:
         rng = np.random.default_rng()
         natural_dataset = rng.choice(natural_images, len(cifar_data_train.data))
-        natural_dataset = np.swapaxes(natural_dataset, 1, 3)
     else:
         natural_dataset = copy.deepcopy(cifar_data_train.data)
         print("NO NATURAL IMAGES FOUND!")
-    # please ensure proportions add up to one
+    # natural_dataset = np.swapaxes(natural_dataset, 1, 3)
+    # print(data_dict)
+    # print(natural_dataset.shape)
+    #print(type(cifar_data_train.targets))
     
     cifar_data_train.data = np.concatenate((cifar_data_train.data, mixup_dataset, natural_dataset))
     cifar_data_train.targets = np.concatenate((cifar_data_train.targets, cifar_data_train.targets, cifar_data_train.targets))
 
-    plot_str = 'CIFAR_' + args.partition + '_' + args.norm + '_' + 'comm_rounds_' + str(args.commrounds) + '_clientfr_' + str(
+    # img = Image.fromarray(cifar_data_train.data[80000], 'L')
+    # img.save('test_img_noise.jpg')
+
+    plot_str = 'MNIST_' + args.partition + '_' + args.norm + '_' + 'comm_rounds_' + str(args.commrounds) + '_clientfr_' + str(
         args.clientfr) + '_numclients_' + str(args.numclient) + '_clientepochs_' + str(
         args.clientepochs) + '_clientbs_' + str(args.clientbs) + '_clientLR_' + str(args.clientlr)
     print(plot_str)
     plot_str2 = f"Supplement: {args.no_supplement}, Mixup: {args.mixup_prop} (Mixup_k:{args.mix_num}, Laplacian Scale: {args.laplace_scale}), Natural: {args.natural_img_prop}, Real: {args.real_prop}"
     print(plot_str2)
 
+    cifar_data_train.data = torch.from_numpy(cifar_data_train.data)
+
     # Check client distributions
-    # y_train = np.concatenate((np.array(cifar_data_train.targets), np.array(cifar_data_train.targets)))
+    # y_train = cifar_data_train.targets
     # a, t = np.unique(y_train[data_dict[2]], return_counts=True)
     # print(f"{a} \n{t}")
     filename=None
@@ -531,5 +558,6 @@ if __name__ == '__main__':
             print('Name is taken...trying again...')
             num += 1
             filename = f"{plot_str}||{plot_str2}||{num}"
+    
     
     trained_model = training(cifar_cnn, H[0], H[4], H[5], cifar_data_train, data_dict, H[1], H[2], H[3], plot_str, "green", cifar_data_test, 128, criterion, num_classes, classes_test, args.sch_flag, filename)
