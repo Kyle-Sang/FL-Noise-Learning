@@ -20,6 +20,7 @@ from torchvision import transforms, utils, datasets
 from argparse import ArgumentParser
 from torchvision import transforms as tt
 import csv
+from collections import defaultdict
 
 # set manual seed for reproducibility
 # seed = 42
@@ -116,23 +117,30 @@ def non_iid_partition(dataset, n_nets, alpha, mixup_prop, natural_prop, real_pro
     N = y_train.shape[0]
     net_dataidx_map = {}
     num = []
-
-    pbar = tqdm(desc='partitioning', total = 10)
-    while min_size < 10:
-        idx_batch = [[] for _ in range(n_nets)]
-        # for each class in the dataset
-        for k in range(K):
-            idx_k = np.where(y_train == k)[0]
-            np.random.shuffle(idx_k)
-            proportions = np.random.dirichlet(np.repeat(alpha, n_nets))
-            ## Balance
-            proportions = np.array([p * (len(idx_j) < N / n_nets) for p, idx_j in zip(proportions, idx_batch)])
-            proportions = proportions / proportions.sum()
-            proportions = (np.cumsum(proportions) * len(idx_k)).astype(int)[:-1]
-            idx_batch = [idx_j + idx.tolist() for idx_j, idx in zip(idx_batch, np.split(idx_k, proportions))]
-            min_size = min([len(idx_j) for idx_j in idx_batch])
-            pbar.update(min_size)
-            num.append(len(idx_batch))
+    # while min_size < 10:
+    idx_batch = [[] for _ in range(n_nets)]
+    count = defaultdict(int)
+    indices = np.arange(n_nets)
+    # for each class in the dataset
+    for k in range(K):
+        print(indices)
+        print(count)
+        idx_k = np.where(y_train == k)[0]
+        np.random.shuffle(idx_k)
+        # proportions = np.random.dirichlet(np.repeat(alpha, n_nets))
+        proportions = np.zeros(n_nets)
+        proportions[(np.random.choice(indices, alpha, replace=False))] = 1 / alpha
+        for idx in np.nonzero(proportions)[0]:
+            count[idx] += 1
+            if count[idx] >= alpha:
+                indices = np.delete(indices, np.where(indices == idx)[0])
+        ## Balance
+        # proportions = np.array([p * (len(idx_j) < N / n_nets) for p, idx_j in zip(proportions, idx_batch)])
+        # proportions = proportions / proportions.sum()
+        proportions = (np.cumsum(proportions) * len(idx_k)).astype(int)[:-1]
+        idx_batch = [idx_j + idx.tolist() for idx_j, idx in zip(idx_batch, np.split(idx_k, proportions))]
+        min_size = min([len(idx_j) for idx_j in idx_batch])
+        num.append(len(idx_batch))
 
 
     if supplement:
@@ -428,7 +436,7 @@ if __name__ == '__main__':
     parser.add_argument('--norm', default="bn")
     parser.add_argument('--partition', default="noniid")
     parser.add_argument('--client_number', default=100)
-    parser.add_argument('--alpha_partition', default=0.001)
+    parser.add_argument('--alpha_partition', default=2)
     parser.add_argument('--commrounds', type=int, default=200)
     parser.add_argument('--clientfr', type=float, default=1.0)
     parser.add_argument('--numclient', type=int, default=10)
@@ -480,7 +488,7 @@ if __name__ == '__main__':
     if args.partition == 'noniid':
         # (dataset, clients, total_shards, shards_size, num_shards_per_client):
         # alpha for the Dirichlet distribution
-        data_dict = non_iid_partition(cifar_data_train, args.numclient, float(args.alpha_partition),
+        data_dict = non_iid_partition(cifar_data_train, args.numclient, int(args.alpha_partition),
                                        args.mixup_prop, args.natural_img_prop, args.real_prop, supplement=args.no_supplement)
     else:
         data_dict = iid_partition(cifar_data_train, 100)  # Uncomment for idd_partition
