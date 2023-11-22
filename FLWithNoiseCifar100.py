@@ -122,13 +122,10 @@ def non_iid_partition(dataset, n_nets, alpha, mixup_prop, natural_prop, real_pro
     indices = np.arange(n_nets)
     count = dict.fromkeys(indices, 0)
     # for each class in the dataset
-    for k in range(K):
-        print(indices)
-        print(count)
+    for k in tqdm(range(K)):
         idx_k = np.where(y_train == k)[0]
         np.random.shuffle(idx_k)
         proportions = np.random.dirichlet(np.repeat(alpha, n_nets))
-
         # proportions = np.zeros(n_nets)
         # min_value = min(count.values())
         # min_keys_array = np.array([key for key, value in count.items() if value == min_value])
@@ -139,7 +136,6 @@ def non_iid_partition(dataset, n_nets, alpha, mixup_prop, natural_prop, real_pro
         #     count[idx] += 1
         #     if count[idx] >= alpha:
         #         indices = np.delete(indices, np.where(indices == idx)[0])
-
         ## Balance
         proportions = np.array([p * (len(idx_j) < N / n_nets) for p, idx_j in zip(proportions, idx_batch)])
         proportions = proportions / proportions.sum()
@@ -426,7 +422,7 @@ def testing(model, dataset, bs, criterion, num_classes, classes):
             correct_tensor.cpu().numpy())
 
         # test accuracy for each object class
-        for i in range(data.size(0)):
+        for i in range(data.size(0)): # num_classes):
             label = labels.data[i]
             correct_class[label] += correct[i].item()
             total_class[label] += 1
@@ -442,7 +438,6 @@ if __name__ == '__main__':
     parser = ArgumentParser()
     parser.add_argument('--norm', default="bn")
     parser.add_argument('--partition', default="noniid")
-    parser.add_argument('--client_number', default=100)
     parser.add_argument('--num_class', default=0.05)
     parser.add_argument('--commrounds', type=int, default=200)
     parser.add_argument('--clientfr', type=float, default=1.0)
@@ -473,12 +468,13 @@ if __name__ == '__main__':
         [transforms.ToTensor(),
          transforms.Normalize(*stats)])
 
-    cifar_data_train = datasets.CIFAR10(root='./data', train=True, download=True, transform=transforms_cifar_train)
-    cifar_data_test = datasets.CIFAR10(root='./data', train=False, download=True, transform=transforms_cifar_test)
+    cifar_data_train = datasets.CIFAR100(root='./data', train=True, download=True, transform=transforms_cifar_train)
+    cifar_data_test = datasets.CIFAR100(root='./data', train=False, download=True, transform=transforms_cifar_test)
 
     classes = np.array(list(cifar_data_train.class_to_idx.values()))
     classes_test = np.array(list(cifar_data_test.class_to_idx.values()))
     num_classes = len(classes_test)
+    print(f"CLASSES {num_classes}")
 
     criterion = nn.CrossEntropyLoss()
 
@@ -495,7 +491,7 @@ if __name__ == '__main__':
     if args.partition == 'noniid':
         # (dataset, clients, total_shards, shards_size, num_shards_per_client):
         # alpha for the Dirichlet distribution
-        data_dict = non_iid_partition(cifar_data_train, args.numclient, args.num_class,
+        data_dict = non_iid_partition(cifar_data_train, args.numclient, args.num_class, # int(args.num_class),
                                        args.mixup_prop, args.natural_img_prop, args.real_prop, supplement=args.no_supplement)
     else:
         data_dict = iid_partition(cifar_data_train, 100)  # Uncomment for idd_partition
@@ -527,7 +523,7 @@ if __name__ == '__main__':
     cifar_data_train.data = np.concatenate((cifar_data_train.data, mixup_dataset, natural_dataset))
     cifar_data_train.targets = np.concatenate((cifar_data_train.targets, cifar_data_train.targets, cifar_data_train.targets))
 
-    plot_str = 'CIFAR_' + args.partition + '_' + args.norm + '_' + 'comm_rounds_' + str(args.commrounds) + '_clientfr_' + str(
+    plot_str = 'CIFAR100_' + args.partition + '_' + args.norm + '_' + 'comm_rounds_' + str(args.commrounds) + '_clientfr_' + str(
         args.clientfr) + '_numclients_' + str(args.numclient) + '_clientepochs_' + str(
         args.clientepochs) + '_clientbs_' + str(args.clientbs) + '_clientLR_' + str(args.clientlr)
     print(plot_str)

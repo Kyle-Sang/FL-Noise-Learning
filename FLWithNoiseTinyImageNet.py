@@ -21,6 +21,7 @@ from argparse import ArgumentParser
 from torchvision import transforms as tt
 import csv
 from collections import defaultdict
+from tin import TinyImageNetDataset
 
 # set manual seed for reproducibility
 # seed = 42
@@ -38,6 +39,23 @@ from PIL import Image
 import numpy as np
 import torchvision.transforms.functional as T
 import glob, random
+from scipy.ndimage import zoom
+
+def load_image_tiny(file_path):
+    img = Image.open(file_path).convert('RGB')
+    img_array = np.array(img)
+    return img_array
+
+def paths_to_tensors(image_paths):
+    tensors = []
+    for path in image_paths:
+        try:
+            img_array = load_image_tiny(path)
+            tensors.append(img_array)
+        except Exception as e:
+            print(f"Error processing {path}: {e}")
+    return np.array(tensors)
+
 
 def load_image(infilename, resize=32) :
     img = T.resize(Image.open(infilename), size=resize)
@@ -122,9 +140,7 @@ def non_iid_partition(dataset, n_nets, alpha, mixup_prop, natural_prop, real_pro
     indices = np.arange(n_nets)
     count = dict.fromkeys(indices, 0)
     # for each class in the dataset
-    for k in range(K):
-        print(indices)
-        print(count)
+    for k in tqdm(range(K)):
         idx_k = np.where(y_train == k)[0]
         np.random.shuffle(idx_k)
         proportions = np.random.dirichlet(np.repeat(alpha, n_nets))
@@ -139,7 +155,7 @@ def non_iid_partition(dataset, n_nets, alpha, mixup_prop, natural_prop, real_pro
         #     count[idx] += 1
         #     if count[idx] >= alpha:
         #         indices = np.delete(indices, np.where(indices == idx)[0])
-
+        
         ## Balance
         proportions = np.array([p * (len(idx_j) < N / n_nets) for p, idx_j in zip(proportions, idx_batch)])
         proportions = proportions / proportions.sum()
@@ -426,7 +442,7 @@ def testing(model, dataset, bs, criterion, num_classes, classes):
             correct_tensor.cpu().numpy())
 
         # test accuracy for each object class
-        for i in range(data.size(0)):
+        for i in range(data.size(0)): # num_classes):
             label = labels.data[i]
             correct_class[label] += correct[i].item()
             total_class[label] += 1
@@ -442,7 +458,6 @@ if __name__ == '__main__':
     parser = ArgumentParser()
     parser.add_argument('--norm', default="bn")
     parser.add_argument('--partition', default="noniid")
-    parser.add_argument('--client_number', default=100)
     parser.add_argument('--num_class', default=0.05)
     parser.add_argument('--commrounds', type=int, default=200)
     parser.add_argument('--clientfr', type=float, default=1.0)
@@ -472,20 +487,48 @@ if __name__ == '__main__':
     transforms_cifar_test = transforms.Compose(
         [transforms.ToTensor(),
          transforms.Normalize(*stats)])
+    transforms_cifar_train = transforms.Compose([
+        transforms.RandomRotation(20),
+        transforms.RandomHorizontalFlip(0.5),
+        transforms.ToTensor(),
+        transforms.Normalize([0.4802, 0.4481, 0.3975], [0.2302, 0.2265, 0.2262]),
+    ])
 
-    cifar_data_train = datasets.CIFAR10(root='./data', train=True, download=True, transform=transforms_cifar_train)
-    cifar_data_test = datasets.CIFAR10(root='./data', train=False, download=True, transform=transforms_cifar_test)
+    transforms_cifar_test = transforms.Compose([
+        transforms.RandomRotation(20),
+        transforms.RandomHorizontalFlip(0.5),
+        transforms.ToTensor(),
+        transforms.Normalize([0.4802, 0.4481, 0.3975], [0.2302, 0.2265, 0.2262]),
+    ])
+
+    data_dir = './tiny-imagenet-200/'
+    cifar_data_train = datasets.ImageFolder(os.path.join(data_dir, 'train'), transforms_cifar_train)
+    cifar_data_test = datasets.ImageFolder(os.path.join(data_dir, 'test'), transforms_cifar_test)
+
+    paths_train = [t[0] for t in cifar_data_train.samples]
+    paths_test = [t[0] for t in cifar_data_test.samples]
+    cifar_data_train.data = paths_to_tensors(paths_train)
+    cifar_data_test.data = paths_to_tensors(paths_test)
+    # cifar_data_train = TinyImageNetDataset('./data/tiny-imagenet-200/', mode='train', download=False, transform=transforms_cifar_train)
+    # cifar_data_test = TinyImageNetDataset('./data/tiny-imagenet-200/', mode='test', download=False, transform=transforms_cifar_test)
 
     classes = np.array(list(cifar_data_train.class_to_idx.values()))
     classes_test = np.array(list(cifar_data_test.class_to_idx.values()))
     num_classes = len(classes_test)
+    print(f"CLASSES {num_classes}")
 
     criterion = nn.CrossEntropyLoss()
 
     path = args.natural_image_path + "/**/*.jpg"
     images = glob.glob(path)
     print(len(images))
-    natural_images = np.asarray(list(map(load_image, images[:len(cifar_data_train)])))
+    small_images = np.asarray(list(map(load_image, images[:len(cifar_data_train)])))
+
+    natural_images = np.zeros((len(cifar_data_train), 3, 64, 64))
+
+    for i in range(len(cifar_data_train)):
+        for channel in range(3):
+            natural_images[i, channel] = zoom(small_images[i, channel], 2, order=1)
     print("done")
     print(len(natural_images))
 
@@ -527,7 +570,7 @@ if __name__ == '__main__':
     cifar_data_train.data = np.concatenate((cifar_data_train.data, mixup_dataset, natural_dataset))
     cifar_data_train.targets = np.concatenate((cifar_data_train.targets, cifar_data_train.targets, cifar_data_train.targets))
 
-    plot_str = 'CIFAR_' + args.partition + '_' + args.norm + '_' + 'comm_rounds_' + str(args.commrounds) + '_clientfr_' + str(
+    plot_str = 'TinyIMGNet_' + args.partition + '_' + args.norm + '_' + 'comm_rounds_' + str(args.commrounds) + '_clientfr_' + str(
         args.clientfr) + '_numclients_' + str(args.numclient) + '_clientepochs_' + str(
         args.clientepochs) + '_clientbs_' + str(args.clientbs) + '_clientLR_' + str(args.clientlr)
     print(plot_str)
