@@ -210,13 +210,20 @@ class CustomDataset(Dataset):
     def __init__(self, dataset, idxs):
         self.dataset = dataset
         self.idxs = list(idxs)
+        # print(f"dataset shape: {len(self.dataset)}, index length: {len(self.idxs)}")
+        # print(self.dataset.data.shape)
 
     def __len__(self):
         return len(self.idxs)
 
     def __getitem__(self, item):
-        image, label = self.dataset[self.idxs[item]]
-        return image, label
+        # print(f"Item: {item}, index:{self.idxs[item]}")
+        # image, label = self.dataset[self.idxs[item]]
+        image = torch.from_numpy(self.dataset.data[self.idxs[item]]).transpose(0, 2)
+        # print(f"{image.size()}, {type(label)}")
+        # print(f"{torch.from_numpy(self.dataset.data[self.idxs[item]]).transpose(0, 2).size()}, {type(int(self.dataset.targets[self.idxs[item]]))}")
+        label = int(self.dataset.targets[self.idxs[item]])
+        return image.float(), label
 
 
 class ClientUpdate(object):
@@ -461,7 +468,7 @@ if __name__ == '__main__':
     parser.add_argument('--num_class', default=0.05)
     parser.add_argument('--commrounds', type=int, default=200)
     parser.add_argument('--clientfr', type=float, default=1.0)
-    parser.add_argument('--numclient', type=int, default=10)
+    parser.add_argument('--numclient', type=int, default=20)
     parser.add_argument('--clientepochs', type=int, default=1)
     parser.add_argument('--clientbs', type=int, default=128)
     parser.add_argument('--clientlr', type=float, default=0.001)
@@ -479,14 +486,14 @@ if __name__ == '__main__':
 
     # create transforms
     # We will just convert to tensor and normalize since no special transforms are mentioned in the paper
-    stats = ((0.49139968, 0.48215841, 0.44653091), (0.24703223, 0.24348513, 0.26158784))
-    transforms_cifar_train = tt.Compose([tt.ToTensor(),
-                                         tt.RandomCrop(32, padding=4, padding_mode='reflect'),
-                                         tt.RandomHorizontalFlip(p=0.5),
-                                         tt.Normalize(*stats)])
-    transforms_cifar_test = transforms.Compose(
-        [transforms.ToTensor(),
-         transforms.Normalize(*stats)])
+    # stats = ((0.49139968, 0.48215841, 0.44653091), (0.24703223, 0.24348513, 0.26158784))
+    # transforms_cifar_train = tt.Compose([tt.ToTensor(),
+    #                                      tt.RandomCrop(32, padding=4, padding_mode='reflect'),
+    #                                      tt.RandomHorizontalFlip(p=0.5),
+    #                                      tt.Normalize(*stats)])
+    # transforms_cifar_test = transforms.Compose(
+    #     [transforms.ToTensor(),
+    #      transforms.Normalize(*stats)])
     transforms_cifar_train = transforms.Compose([
         transforms.RandomRotation(20),
         transforms.RandomHorizontalFlip(0.5),
@@ -523,10 +530,11 @@ if __name__ == '__main__':
     images = glob.glob(path)
     print(len(images))
     small_images = np.asarray(list(map(load_image, images[:len(cifar_data_train)])))
+    print(f"length: {len(cifar_data_train)}")
 
     natural_images = np.zeros((len(cifar_data_train), 3, 64, 64))
 
-    for i in range(len(cifar_data_train)):
+    for i in tqdm(range(len(cifar_data_train))):
         for channel in range(3):
             natural_images[i, channel] = zoom(small_images[i, channel], 2, order=1)
     print("done")
@@ -556,8 +564,10 @@ if __name__ == '__main__':
 
     # Add noise portion of dataset
     # IMPORTANT: this part must go after the non_iid_partition is made
+    print("deep copy....")
     mixup_copy = copy.deepcopy(cifar_data_train.data)
     mixup_dataset = AddNoise(mixup_copy, cifar_data_train.data, 0., args.laplace_scale, 1., 0., mix_num=args.mix_num)
+    print("deep copy finished")
     if len(natural_images) != 0:
         rng = np.random.default_rng()
         natural_dataset = rng.choice(natural_images, len(cifar_data_train.data))
@@ -566,9 +576,10 @@ if __name__ == '__main__':
         natural_dataset = copy.deepcopy(cifar_data_train.data)
         print("NO NATURAL IMAGES FOUND!")
     # please ensure proportions add up to one
-    
+    print("concatenation...")
     cifar_data_train.data = np.concatenate((cifar_data_train.data, mixup_dataset, natural_dataset))
     cifar_data_train.targets = np.concatenate((cifar_data_train.targets, cifar_data_train.targets, cifar_data_train.targets))
+    print("concatenation finished")
 
     plot_str = 'TinyIMGNet_' + args.partition + '_' + args.norm + '_' + 'comm_rounds_' + str(args.commrounds) + '_clientfr_' + str(
         args.clientfr) + '_numclients_' + str(args.numclient) + '_clientepochs_' + str(
@@ -589,5 +600,6 @@ if __name__ == '__main__':
             print('Name is taken...trying again...')
             num += 1
             filename = f"{plot_str}||{plot_str2}||{num}"
+    print(f"Dataset: {len(cifar_data_train)}, Index: {len(data_dict[0])}")
     
     trained_model = training(cifar_cnn, H[0], H[4], H[5], cifar_data_train, data_dict, H[1], H[2], H[3], plot_str, "green", cifar_data_test, 128, criterion, num_classes, classes_test, args.sch_flag, filename)
