@@ -21,7 +21,6 @@ from argparse import ArgumentParser
 from torchvision import transforms as tt
 import csv
 from collections import defaultdict
-from tin import TinyImageNetDataset
 
 # set manual seed for reproducibility
 # seed = 42
